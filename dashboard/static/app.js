@@ -42,7 +42,7 @@ async function refresh() {
     renderDetails("drowsiness", state.drowsiness);
     renderDetails("gps", state.gps);
     renderDetails("geofence", state.geofence);
-    renderDetails("air-quality", state.air_quality);
+    renderDetails("alcohol", state.alcohol);
     renderDetails("relays", state.relays);
     renderHazards(state.hazards || []);
     document.getElementById("esp32").textContent = JSON.stringify(state.esp32 || {}, null, 2);

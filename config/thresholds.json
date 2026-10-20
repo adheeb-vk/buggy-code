@@ -1,5 +1,5 @@
 {
-  "_comment": "TODO: Set and tune all thresholds using the final camera, IMU, and air-quality hardware.",
+  "_comment": "TODO: Set and tune all thresholds using the final camera, IMU, and MQ-3 hardware.",
   "drowsiness": {
     "_comment": "TODO: Provisional values for mock development only; calibrate per camera placement and driver population.",
     "ear_below": 0.21,
@@ -8,14 +8,15 @@
     "clear_debounce_seconds": 1.0
   },
   "pothole": {
-    "_comment": "TODO: Provisional values for mock development only; verify the ESP32 IMU scale, axis orientation, and road response.",
+    "_comment": "TODO: Provisional values. Mount the MPU board with its printed Z axis vertical, then tune using real road and manual-shake readings.",
     "vertical_acceleration_threshold_g": 0.35,
     "relay_pulse_seconds": 0.3,
-    "repeat_radius_m": 10.0
+    "repeat_radius_m": 10.0,
+    "event_cooldown_seconds": 2.0
   },
-  "air_quality": {
-    "_comment": "TODO: Provisional values for mock development only; calibrate against the final AQI sensor and desired cabin-air response.",
-    "trigger_above": 76.0,
-    "hysteresis": 5.0
+  "alcohol": {
+    "_comment": "TODO: MQ-3 detects alcohol vapour only; it cannot determine a driver's blood-alcohol concentration. Measure a warmed-up clean-air baseline and controlled test readings before setting these raw ESP32 ADC thresholds.",
+    "trigger_above": null,
+    "hysteresis": null
   }
 }

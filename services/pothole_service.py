@@ -44,6 +44,7 @@ class PotholeConfig:
     vertical_acceleration_threshold_g: float
     relay_pulse_seconds: float
     repeat_radius_m: float
+    event_cooldown_seconds: float
 
     @classmethod
     def from_json(cls, path: Path = DEFAULT_THRESHOLDS) -> "PotholeConfig":
@@ -53,6 +54,7 @@ class PotholeConfig:
             "vertical_acceleration_threshold_g",
             "relay_pulse_seconds",
             "repeat_radius_m",
+            "event_cooldown_seconds",
         )
         if any(values.get(key) is None for key in required):
             raise ValueError("pothole thresholds must be configured")
@@ -61,6 +63,7 @@ class PotholeConfig:
             config.vertical_acceleration_threshold_g <= 0
             or config.relay_pulse_seconds <= 0
             or config.repeat_radius_m <= 0
+            or config.event_cooldown_seconds <= 0
         ):
             raise ValueError("pothole thresholds must be greater than zero")
         return config
@@ -156,6 +159,7 @@ class PotholeService:
         self._lock = threading.Lock()
         self._pulse_timer: threading.Timer | None = None
         self._pulse_generation = 0
+        self._last_event_at_monotonic: float | None = None
 
     def process_telemetry(self, telemetry: Mapping[str, object]) -> HazardEvent | None:
         """Inspect one ESP32 telemetry message for a vertical-acceleration spike."""
@@ -169,11 +173,20 @@ class PotholeService:
             return None
         if magnitude_g < self._config.vertical_acceleration_threshold_g:
             return None
+        now = time.monotonic()
+        with self._lock:
+            if (
+                self._last_event_at_monotonic is not None
+                and now - self._last_event_at_monotonic < self._config.event_cooldown_seconds
+            ):
+                return None
         fix = self._gps.latest_fix()
         if not fix:
             LOGGER.warning("pothole spike of %.2fg ignored because GPS has no valid fix", magnitude_g)
             return None
         event = self._hazard_log.record(fix, magnitude_g, self._config.repeat_radius_m)
+        with self._lock:
+            self._last_event_at_monotonic = now
         self._pulse_relay()
         LOGGER.info(
             "pothole logged at %.6f, %.6f (%.2fg, confidence %d)",
@@ -233,7 +246,10 @@ def haversine_m(lat_a: float, lon_a: float, lat_b: float, lon_b: float) -> float
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mock", action="store_true", help="use mock ESP32 and GPS sources")
+    parser.add_argument("--mock", action="store_true", help="use mock ESP32 and mock GPS")
+    parser.add_argument("--mock-gps", action="store_true", help="use mock GPS with the real ESP32-S3")
+    parser.add_argument("--port", default="/dev/esp32", help="ESP32-S3 serial device")
+    parser.add_argument("--baudrate", type=int, default=115200, help="ESP32-S3 serial baud rate")
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE, help="SQLite hazard log path")
     parser.add_argument("--duration", type=float, default=4.0, help="run duration for this standalone service")
     args = parser.parse_args()
@@ -241,9 +257,9 @@ def main() -> None:
         parser.error("--duration must be greater than zero")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
-    link = Esp32Link(mock=args.mock)
+    link = Esp32Link(port=args.port, baudrate=args.baudrate, mock=args.mock)
     controller = RelayController.from_config(link)
-    gps = Sim808GpsService(mock=args.mock)
+    gps = Sim808GpsService(mock=args.mock or args.mock_gps)
     hazard_log = HazardLog(args.database)
     service = PotholeService(controller, gps, hazard_log, PotholeConfig.from_json())
     link.add_telemetry_listener(service.process_telemetry)

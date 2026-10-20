@@ -16,6 +16,7 @@ import serial
 
 LOGGER = logging.getLogger(__name__)
 TelemetryCallback = Callable[[dict[str, Any]], None]
+ControlCallback = Callable[[dict[str, Any]], None]
 
 
 class SerialPort(Protocol):
@@ -52,7 +53,6 @@ class MockTelemetry:
                 "y": round(80 * math.cos(phase)),
                 "z": vertical_acceleration,
             },
-            "aqi": 72 + round(8 * math.sin(phase)),
         }
 
 
@@ -71,6 +71,7 @@ class Esp32Link:
         mock: bool = False,
         sample_hz: float = 5.0,
         on_telemetry: TelemetryCallback | None = None,
+        on_control: ControlCallback | None = None,
         serial_factory: Callable[..., SerialPort] = serial.Serial,
     ) -> None:
         if sample_hz <= 0:
@@ -82,6 +83,9 @@ class Esp32Link:
         self._telemetry_listeners: list[TelemetryCallback] = []
         if on_telemetry:
             self._telemetry_listeners.append(on_telemetry)
+        self._control_listeners: list[ControlCallback] = []
+        if on_control:
+            self._control_listeners.append(on_control)
         self._serial_factory = serial_factory
         self._serial: SerialPort | None = None
         self._buffer = bytearray()
@@ -122,6 +126,11 @@ class Esp32Link:
         """Register a callback for each complete telemetry JSON object."""
         with self._lock:
             self._telemetry_listeners.append(listener)
+
+    def add_control_listener(self, listener: ControlCallback) -> None:
+        """Register a callback for ESP32 status, acknowledgement, or error JSON."""
+        with self._lock:
+            self._control_listeners.append(listener)
 
     def feed_bytes(self, data: bytes) -> None:
         """Feed arbitrary serial chunks into the newline JSON parser.
@@ -173,9 +182,13 @@ class Esp32Link:
         if not isinstance(decoded, dict):
             LOGGER.warning("ignoring ESP32 JSON value that is not an object: %r", decoded)
             return
-        telemetry_keys = {"seatbelt", "alcohol", "water", "current", "aqi", "accel"}
-        if telemetry_keys.isdisjoint(decoded):
+        telemetry_keys = {"seatbelt", "alcohol", "water", "current", "accel"}
+        if decoded.get("type") != "telemetry" and telemetry_keys.isdisjoint(decoded):
             LOGGER.info("ESP32 control message: %s", decoded)
+            with self._lock:
+                listeners = tuple(self._control_listeners)
+            for listener in listeners:
+                listener(decoded.copy())
             return
         with self._lock:
             self._latest = decoded
@@ -191,18 +204,53 @@ def main() -> None:
     parser.add_argument("--baudrate", type=int, default=115200, help="serial baud rate")
     parser.add_argument("--once", action="store_true", help="print one reading and exit")
     parser.add_argument("--timeout", type=float, default=5.0, help="seconds to wait with --once")
+    parser.add_argument(
+        "--relay-test",
+        choices=("drowsiness", "pothole", "alcohol", "geofence"),
+        help="send one relay command and print its ESP32 acknowledgement",
+    )
+    parser.add_argument(
+        "--relay-state",
+        choices=("0", "1"),
+        default="1",
+        help="state sent with --relay-test (default: 1)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     first_reading = threading.Event()
+    relay_acknowledgement: dict[str, Any] = {}
+    relay_acknowledged = threading.Event()
+
+    def receive_control(message: dict[str, Any]) -> None:
+        if (
+            args.relay_test
+            and message.get("type") == "ack"
+            and message.get("cmd") == "relay"
+            and message.get("feature") == args.relay_test
+        ):
+            relay_acknowledgement.update(message)
+            relay_acknowledged.set()
+
     link = Esp32Link(
         port=args.port,
         baudrate=args.baudrate,
         mock=args.mock,
         on_telemetry=lambda _: first_reading.set(),
+        on_control=receive_control,
     )
     try:
         link.start()
+        if args.relay_test:
+            link.send_json(
+                {"cmd": "relay", "feature": args.relay_test, "state": int(args.relay_state)}
+            )
+            if not relay_acknowledged.wait(timeout=args.timeout):
+                raise TimeoutError(
+                    f"no relay acknowledgement received within {args.timeout:g} seconds"
+                )
+            print(json.dumps(relay_acknowledgement, sort_keys=True))
+            return
         if args.once:
             if not first_reading.wait(timeout=args.timeout):
                 raise TimeoutError(f"no ESP32 telemetry received within {args.timeout:g} seconds")

@@ -17,6 +17,7 @@ import serial
 
 LOGGER = logging.getLogger(__name__)
 FixCallback = Callable[["GpsFix"], None]
+DEFAULT_PI5_GPS_PORT = "/dev/ttyAMA0"
 
 
 class GpsSerialPort(Protocol):
@@ -92,7 +93,7 @@ class Sim808GpsService:
     def __init__(
         self,
         *,
-        port: str = "/dev/serial0",
+        port: str = DEFAULT_PI5_GPS_PORT,
         baudrate: int = 115200,
         mock: bool = False,
         poll_interval_seconds: float = 1.0,
@@ -149,6 +150,10 @@ class Sim808GpsService:
         """Register a callback for each valid GPS fix."""
         with self._lock:
             self._fix_listeners.append(listener)
+
+    def send_at_command(self, command: str) -> list[str]:
+        """Send one AT command after the service has opened the UART."""
+        return self._send_at(command)
 
     def _enable_gnss(self) -> None:
         self._send_at("AT")
@@ -219,10 +224,14 @@ def _cycle_indices(length: int):
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mock", action="store_true", help="use a synthetic looping GPS track")
-    parser.add_argument("--port", default="/dev/serial0", help="SIM808 UART device")
+    parser.add_argument("--port", default=DEFAULT_PI5_GPS_PORT, help="SIM808 UART device")
     parser.add_argument("--baudrate", type=int, default=115200, help="SIM808 UART baud rate")
     parser.add_argument("--once", action="store_true", help="print one fix and exit")
+    parser.add_argument("--at-test", action="store_true", help="verify SIM808 UART AT communication and exit")
+    parser.add_argument("--timeout", type=float, default=90.0, help="seconds to wait with --once")
     args = parser.parse_args()
+    if args.timeout <= 0:
+        parser.error("--timeout must be greater than zero")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 
     received_fix = threading.Event()
@@ -234,9 +243,12 @@ def main() -> None:
     )
     try:
         service.start()
+        if args.at_test:
+            print(json.dumps({"response": service.send_at_command("AT")}, sort_keys=True))
+            return
         if args.once:
-            if not received_fix.wait(timeout=3):
-                raise TimeoutError("no valid GPS fix received within three seconds")
+            if not received_fix.wait(timeout=args.timeout):
+                raise TimeoutError(f"no valid GPS fix received within {args.timeout:g} seconds")
             fix = service.latest_fix()
             assert fix is not None
             print(json.dumps(fix.as_dict(), sort_keys=True))

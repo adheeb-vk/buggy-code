@@ -21,7 +21,7 @@ class SharedState:
             "relays": {},
             "gps": None,
             "drowsiness": None,
-            "air_quality": None,
+            "alcohol": None,
             "geofence": None,
         }
 
@@ -37,8 +37,8 @@ class SharedState:
     def update_drowsiness(self, status: Mapping[str, Any]) -> None:
         self._update("drowsiness", dict(status))
 
-    def update_air_quality(self, status: Mapping[str, Any]) -> None:
-        self._update("air_quality", dict(status))
+    def update_alcohol(self, status: Mapping[str, Any]) -> None:
+        self._update("alcohol", dict(status))
 
     def update_geofence(self, status: Mapping[str, Any]) -> None:
         self._update("geofence", dict(status))

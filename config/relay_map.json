@@ -2,6 +2,6 @@
   "_comment": "TODO: Replace null relay mappings with the finalized ESP32-S3 GPIO assignments. The ESP32-S3 firmware must use the same feature-to-GPIO mapping.",
   "drowsiness": null,
   "pothole": null,
-  "air_quality": null,
+  "alcohol": null,
   "geofence": null
 }

@@ -23,40 +23,113 @@ python3 services/esp32_link.py --mock --once
 The command prints one synthetic sensor JSON object and exits. To keep it
 running, omit `--once` and use `Ctrl-C` to stop it.
 
+## ESP32-S3 firmware
+
+Flash the new minimal sensor-and-relay firmware at
+`firmware/buggy_esp32s3/buggy_esp32s3.ino`. It separates all board-specific
+pins into `firmware/buggy_esp32s3/board_config.h`.
+
+Every sensor and relay starts as `-1` (disabled). With no hardware connected,
+the firmware still sends a `type: telemetry` JSON line every 200 ms. It will
+not read floating pins or drive any relay until you replace an individual
+clearly marked `TODO` value after verifying the physical wiring.
+
+It requires ArduinoJson 6.x, installable using Arduino IDE Library Manager.
+
 ## Verify the connected ESP32-S3
 
-In the Arduino IDE, enable **Tools → USB CDC On Boot**, then flash
-`esp32s3_code.ino`. With sensors disconnected, the sketch still sends a JSON
-line every 200 ms. It reports `"imu": 0` and omits `accel` until an MPU6050 is
-connected, so the Pi cannot mistake missing IMU data for a pothole.
+In the Arduino IDE, enable **Tools → USB CDC On Boot**, set **USB Mode** to
+**Hardware CDC and JTAG**, then flash
+`firmware/buggy_esp32s3/buggy_esp32s3.ino`. With sensors disconnected, the
+sketch still sends a JSON line every 200 ms. It reports `"imu": 0` and omits
+`accel` until an MPU6050 is connected, so the Pi cannot mistake missing IMU
+data for a pothole.
 
 ```bash
 source venv/bin/activate
 python services/esp32_link.py --port /dev/ttyACM0 --once
 ```
 
-The expected response contains `seatbelt`, `alcohol`, `water`, `current`,
-`aqi`, and `imu`. Relay acknowledgement messages are control messages; they do
+The expected response contains `seatbelt`, `alcohol`, `water`, `current`, and
+`imu` when those inputs are configured. Relay acknowledgement messages are control messages; they do
 not replace the latest sensor telemetry on the Pi.
+
+### Verify the relay protocol safely
+
+Before any relay pin is configured, verify bidirectional serial communication:
+
+```bash
+source venv/bin/activate
+python services/esp32_link.py --port /dev/ttyACM0 --relay-test drowsiness
+```
+
+The expected acknowledgement is `"ok": false` with
+`"reason": "relay_unconfigured"`. That is a successful safety check: the
+ESP32 received and understood the Pi command, and it did not drive any GPIO.
+
+### ESP32-S3 USB diagnostic
+
+If the complete firmware does not emit telemetry, first flash
+`firmware/esp32_usb_test/esp32_usb_test.ino`. This temporary sketch reads no
+sensors and controls no GPIO; it emits a JSON line twice per second. With the
+same USB CDC settings, verify it with:
+
+```bash
+source venv/bin/activate
+python services/esp32_link.py --port /dev/ttyACM0 --once
+```
+
+An output containing `"diagnostic":"usb_cdc"` proves the USB link. Reflash
+`firmware/buggy_esp32s3/buggy_esp32s3.ino` only after this succeeds.
 
 Camera setup and the ESP32-S3 udev rule will be documented as their services
 are implemented.
 
 ## SIM808 UART setup
 
-Enable the Pi UART and disable its serial login shell before connecting the
-SIM808:
+The Raspberry Pi 5 uses its dedicated debug UART by default. Enable a separate
+UART0 on the 40-pin header before connecting the SIM808. Edit
+`/boot/firmware/config.txt`:
 
 ```bash
-sudo raspi-config
+sudo nano /boot/firmware/config.txt
 ```
 
-Then choose **Interface Options → Serial Port**, answer **No** to the login
-shell, and answer **Yes** to enable serial hardware. The service defaults to
-`/dev/serial0`; pass `--port` if the configured UART device differs.
+Add this one line, save, and reboot:
 
-The SIM808 must use its own suitable power supply and its serial logic level
-must be verified as 3.3 V-compatible before wiring it to Pi GPIO UART pins.
+```text
+dtoverlay=uart0-pi5
+```
+
+After the reboot, the GPS service uses `/dev/ttyAMA0`, which is UART0 on the
+GPIO header. Do not use `/dev/serial0` for this project: on the Pi 5 it is the
+dedicated debug UART.
+
+| SIM808 serial label | Raspberry Pi 5 GPIO header | Notes |
+| --- | --- | --- |
+| `TXD` | physical pin 10, GPIO15 / RXD0 | Direct only when the breakout `TXD` output is 3.3 V or lower. |
+| `RXD` | physical pin 8, GPIO14 / TXD0 through a 3.3 V-to-2.8 V level shifter or divider | Do not drive SIM808 RXD directly from the Pi. |
+| `GND` | physical pin 6, GND | Both devices need this common ground. |
+
+For a simple Pi-TX divider, use 1 kOhm between Pi pin 8 and SIM808 `RXD`, then
+5.6 kOhm between the SIM808 `RXD` node and GND. Do not connect the SIM808 power
+input to the Pi 5 V pin; retain its separate power supply. A bare SIM808 uses
+2.8 V UART logic; if the breakout raises `TXD` to 5 V, add a level shifter on
+that path too.
+
+Verify AT communication before waiting for a satellite fix:
+
+```bash
+source venv/bin/activate
+python services/gps_service.py --port /dev/ttyAMA0 --at-test
+```
+
+Expected output is `{"response": ["OK"]}`. Then request one GPS fix:
+
+```bash
+source venv/bin/activate
+python services/gps_service.py --port /dev/ttyAMA0 --once --timeout 90
+```
 
 ## Run GPS without hardware
 
@@ -130,16 +203,81 @@ Pothole detection assumes `accel.z` is aligned with gravity and uses 16,384 raw
 IMU units per g. Both the scale assumption and the provisional spike, pulse,
 and repeat-radius thresholds are marked `TODO` in `config/thresholds.json`.
 
-## Run the air-quality guardian without hardware
+## MPU-9250 / MPU-6500 severe-shake mapping
+
+The photographed board supports I²C. Mount it firmly with its printed **Z**
+arrow pointing upward when the buggy is level. Wire it to the ESP32-S3 as
+follows:
+
+| IMU pin | ESP32-S3 pin | Purpose |
+| --- | --- | --- |
+| `VCC` | `3V3` | 3.3 V power and I²C logic level |
+| `GND` | `GND` | Shared ground |
+| `SDA` | pin labelled `8` | I²C data |
+| `SCL` | pin labelled `9` | I²C clock |
+| `AD0` | `GND` | Selects I²C address `0x68` |
+| `NCS` | `3V3` | Keeps the module in I²C mode |
+| `FSYNC` | `GND` | Unused input |
+| `EDA`, `ECL`, `INT` | Leave disconnected | Not needed for acceleration logging |
+
+Flash `firmware/buggy_esp32s3/buggy_esp32s3.ino`. The `imu` field in ESP32
+telemetry must become `1`, and telemetry then includes `accel` with `x`, `y`,
+and `z` readings at 50 Hz.
+
+Use the real USB-connected ESP32-S3 with mock GPS while the SIM808 is
+unpowered:
 
 ```bash
-python3 services/air_quality_service.py --mock --duration 8
+source venv/bin/activate
+python services/pothole_service.py --port /dev/ttyACM0 --mock-gps --duration 60
 ```
 
-The mock AQI waveform rises above and then falls below the provisional limits.
-The service logs an `air_quality` relay `HIGH` transition above the trigger and
-a `LOW` transition only at or below the lower hysteresis boundary. It prints
-the current state and a 60-reading in-memory history for the future dashboard.
+Give the firmly mounted sensor one deliberate vertical shake. A shake above
+the provisional 0.35 g threshold creates one row in `data/hazards.db` with a
+mock GPS coordinate. The two-second cooldown prevents one shake from creating
+multiple rows.
+
+## MQ-3 alcohol-vapour monitor
+
+The MQ-3 is used only for alcohol-vapour detection. It is not a cabin-air
+quality sensor and cannot establish a driver's blood-alcohol concentration.
+
+### Wiring for the photographed ESP32-S3 N16R8 board
+
+With the board oriented as in `ref-images/esp32s3.jpeg` (USB ports at the
+bottom), use the pin labelled **4** on the left header for the MQ-3 signal.
+
+| MQ-3 pin | Connect to | Notes |
+| --- | --- | --- |
+| `VCC` | ESP32 `5V` | The MQ-3 heater needs 5 V. |
+| `GND` | ESP32 `GND` | This ground must be shared. |
+| `AO` | ESP32 `GPIO4` through a divider | Never connect 5 V `AO` directly to a 3.3 V ESP32 input. |
+| `DO` | Leave disconnected | The digital threshold is set by the module potentiometer and is not used. |
+
+Build the divider between the MQ-3 `AO` and GPIO4 as follows:
+
+```text
+MQ-3 AO ── 20 kOhm ──┬── ESP32 GPIO4 (pin labelled 4)
+                     |
+                   10 kOhm
+                     |
+                    GND
+```
+
+An optional 0.1 µF capacitor from the GPIO4 node to GND makes the ADC reading
+steadier. Keep the relay disconnected for this first sensor test.
+
+After its ESP32-S3 analog input is configured, collect a warmed-up baseline:
+
+```bash
+source venv/bin/activate
+python services/alcohol_service.py --port /dev/ttyACM0 --duration 60
+```
+
+The output reports raw ADC min, mean, and max values. Leave
+`config/thresholds.json` alcohol thresholds as `null` during this step: no
+relay command is sent. Set the two clearly marked TODO threshold values only
+after comparing clean-air readings against a controlled alcohol-vapour test.
 
 ## Run the geo-fenced advisory without hardware
 
@@ -168,7 +306,8 @@ python3 dashboard/app.py --mock
 
 Open `http://<pi-ip>:5000` from a device on the same Wi-Fi. The dashboard polls
 its read-only `/api/state` endpoint every second. It shows driver status, GPS,
-geofence advisory, AQI, relay state, recent hazards, and raw ESP32 telemetry.
+geofence advisory, MQ-3 status, relay state, recent hazards, and raw ESP32
+telemetry.
 
 ## Try a relay command without hardware
 

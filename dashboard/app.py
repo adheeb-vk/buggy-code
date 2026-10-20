@@ -41,11 +41,15 @@ def build_mock_state() -> SharedState:
             "water": 45,
             "current": 210,
             "accel": {"x": 12, "y": 80, "z": 16391},
-            "aqi": 72,
         }
     )
     state.update_relays(
-        {"drowsiness": False, "pothole": False, "air_quality": False, "geofence": False}
+        {
+            "drowsiness": False,
+            "pothole": False,
+            "alcohol": False,
+            "geofence": False,
+        }
     )
     state.update_gps(
         {
@@ -67,8 +71,13 @@ def build_mock_state() -> SharedState:
             "face_detected": True,
         }
     )
-    state.update_air_quality(
-        {"aqi": 72.0, "alert_active": False, "updated_at_utc": timestamp}
+    state.update_alcohol(
+        {
+            "raw_value": 0,
+            "alcohol_suspected": False,
+            "threshold_configured": False,
+            "updated_at_utc": timestamp,
+        }
     )
     state.update_geofence(
         {
