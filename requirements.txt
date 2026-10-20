@@ -1,0 +1,5 @@
+pyserial>=3.5,<4
+picamera2
+opencv-python
+mediapipe>=1.1,<2
+Flask>=3.0,<4

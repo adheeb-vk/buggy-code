@@ -1,0 +1,21 @@
+{
+  "_comment": "TODO: Set and tune all thresholds using the final camera, IMU, and air-quality hardware.",
+  "drowsiness": {
+    "_comment": "TODO: Provisional values for mock development only; calibrate per camera placement and driver population.",
+    "ear_below": 0.21,
+    "consecutive_frames": 5,
+    "head_yaw_degrees": 30.0,
+    "clear_debounce_seconds": 1.0
+  },
+  "pothole": {
+    "_comment": "TODO: Provisional values for mock development only; verify the ESP32 IMU scale, axis orientation, and road response.",
+    "vertical_acceleration_threshold_g": 0.35,
+    "relay_pulse_seconds": 0.3,
+    "repeat_radius_m": 10.0
+  },
+  "air_quality": {
+    "_comment": "TODO: Provisional values for mock development only; calibrate against the final AQI sensor and desired cabin-air response.",
+    "trigger_above": 76.0,
+    "hysteresis": 5.0
+  }
+}

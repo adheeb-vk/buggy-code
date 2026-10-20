@@ -1,0 +1,12 @@
+{
+  "_comment": "TODO: Replace this mock-only development zone with the exhibition venue's real coordinates, radius, and advisory speed.",
+  "zones": [
+    {
+      "name": "TODO: mock development zone",
+      "lat": 12.0001,
+      "lon": 77.0001,
+      "radius_m": 8.0,
+      "advisory_speed": 10.0
+    }
+  ]
+}
