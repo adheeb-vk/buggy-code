@@ -124,7 +124,15 @@ source venv/bin/activate
 python services/gps_service.py --port /dev/ttyAMA0 --at-test
 ```
 
-Expected output is `{"response": ["OK"]}`. Then request one GPS fix:
+Expected output contains `"ok": true` and `"received": "OK"`. If it does
+not, try the non-destructive multi-baud probe before changing the GPS service:
+
+```bash
+source venv/bin/activate
+python services/gps_service.py --port /dev/ttyAMA0 --probe
+```
+
+Then request one GPS fix:
 
 ```bash
 source venv/bin/activate
@@ -236,6 +244,24 @@ Give the firmly mounted sensor one deliberate vertical shake. A shake above
 the provisional 0.35 g threshold creates one row in `data/hazards.db` with a
 mock GPS coordinate. The two-second cooldown prevents one shake from creating
 multiple rows.
+
+### Use real SIM808 GPS for pothole mapping
+
+Once `gps_service.py --at-test` reports `OK`, omit `--mock-gps`. The service
+then uses the real SIM808 position and ignores shakes until it has a valid GPS
+fix:
+
+```bash
+source venv/bin/activate
+python services/pothole_service.py \
+  --port /dev/ttyACM0 \
+  --gps-port /dev/ttyAMA0 \
+  --duration 300
+```
+
+Use `--gps-baudrate` if the SIM808 AT probe identified a value other than
+115200. Press `Ctrl-C` to stop sooner. Each qualifying shake after a fix is
+recorded in `data/hazards.db` with the live latitude and longitude.
 
 ## MQ-3 alcohol-vapour monitor
 

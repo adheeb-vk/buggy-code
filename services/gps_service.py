@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import threading
 import time
 from collections.abc import Callable
@@ -18,6 +19,7 @@ import serial
 LOGGER = logging.getLogger(__name__)
 FixCallback = Callable[["GpsFix"], None]
 DEFAULT_PI5_GPS_PORT = "/dev/ttyAMA0"
+SIM808_PROBE_BAUDRATES = (115200, 9600, 57600, 38400, 19200)
 
 
 class GpsSerialPort(Protocol):
@@ -124,6 +126,7 @@ class Sim808GpsService:
         if self.mock:
             target = self._run_mock
         else:
+            reject_pi5_debug_uart(self.port)
             self._serial = self._serial_factory(self.port, self.baudrate, timeout=1)
             LOGGER.info("connected to SIM808 at %s", self.port)
             self._enable_gnss()
@@ -221,18 +224,70 @@ def _cycle_indices(length: int):
         index = (index + 1) % length
 
 
+def reject_pi5_debug_uart(port: str) -> None:
+    """Prevent the Pi 5 debug UART from being mistaken for GPIO UART pins."""
+    if port != "/dev/serial0":
+        return
+    try:
+        with open("/proc/device-tree/model", "rb") as model_file:
+            is_pi5 = b"Raspberry Pi 5" in model_file.read()
+    except OSError:
+        is_pi5 = False
+    if is_pi5:
+        raise ValueError(
+            "/dev/serial0 is the Pi 5 debug UART; enable dtoverlay=uart0-pi5, "
+            "wire GPIO14/15, then use --port /dev/ttyAMA0"
+        )
+
+
+def probe_sim808_uart(port: str, baudrates: tuple[int, ...]) -> list[dict[str, object]]:
+    """Send only ``AT`` at each baud rate and return the raw responses."""
+    reject_pi5_debug_uart(port)
+    results: list[dict[str, object]] = []
+    for baudrate in baudrates:
+        received = bytearray()
+        with serial.Serial(port, baudrate, timeout=0.2, write_timeout=1) as serial_port:
+            serial_port.reset_input_buffer()
+            serial_port.write(b"AT\r\n")
+            serial_port.flush()
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                chunk = serial_port.read(256)
+                if chunk:
+                    received.extend(chunk)
+        text = received.decode("ascii", errors="replace").strip()
+        results.append(
+            {
+                "baudrate": baudrate,
+                "received": text,
+                "ok": "OK" in text.splitlines(),
+            }
+        )
+    return results
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mock", action="store_true", help="use a synthetic looping GPS track")
     parser.add_argument("--port", default=DEFAULT_PI5_GPS_PORT, help="SIM808 UART device")
     parser.add_argument("--baudrate", type=int, default=115200, help="SIM808 UART baud rate")
     parser.add_argument("--once", action="store_true", help="print one fix and exit")
-    parser.add_argument("--at-test", action="store_true", help="verify SIM808 UART AT communication and exit")
+    parser.add_argument("--at-test", action="store_true", help="send AT once at --baudrate and exit")
+    parser.add_argument("--probe", action="store_true", help="try AT at common SIM808 baud rates and exit")
     parser.add_argument("--timeout", type=float, default=90.0, help="seconds to wait with --once")
     args = parser.parse_args()
     if args.timeout <= 0:
         parser.error("--timeout must be greater than zero")
+    if args.mock and (args.at_test or args.probe):
+        parser.error("--at-test and --probe require real serial hardware")
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+
+    if args.probe:
+        print(json.dumps(probe_sim808_uart(args.port, SIM808_PROBE_BAUDRATES), sort_keys=True))
+        return
+    if args.at_test:
+        print(json.dumps(probe_sim808_uart(args.port, (args.baudrate,)), sort_keys=True))
+        return
 
     received_fix = threading.Event()
     service = Sim808GpsService(
@@ -243,9 +298,6 @@ def main() -> None:
     )
     try:
         service.start()
-        if args.at_test:
-            print(json.dumps({"response": service.send_at_command("AT")}, sort_keys=True))
-            return
         if args.once:
             if not received_fix.wait(timeout=args.timeout):
                 raise TimeoutError(f"no valid GPS fix received within {args.timeout:g} seconds")

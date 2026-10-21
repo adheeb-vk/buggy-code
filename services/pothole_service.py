@@ -250,6 +250,8 @@ def main() -> None:
     parser.add_argument("--mock-gps", action="store_true", help="use mock GPS with the real ESP32-S3")
     parser.add_argument("--port", default="/dev/esp32", help="ESP32-S3 serial device")
     parser.add_argument("--baudrate", type=int, default=115200, help="ESP32-S3 serial baud rate")
+    parser.add_argument("--gps-port", default="/dev/ttyAMA0", help="SIM808 UART device")
+    parser.add_argument("--gps-baudrate", type=int, default=115200, help="SIM808 UART baud rate")
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE, help="SQLite hazard log path")
     parser.add_argument("--duration", type=float, default=4.0, help="run duration for this standalone service")
     args = parser.parse_args()
@@ -259,7 +261,11 @@ def main() -> None:
 
     link = Esp32Link(port=args.port, baudrate=args.baudrate, mock=args.mock)
     controller = RelayController.from_config(link)
-    gps = Sim808GpsService(mock=args.mock or args.mock_gps)
+    gps = Sim808GpsService(
+        port=args.gps_port,
+        baudrate=args.gps_baudrate,
+        mock=args.mock or args.mock_gps,
+    )
     hazard_log = HazardLog(args.database)
     service = PotholeService(controller, gps, hazard_log, PotholeConfig.from_json())
     link.add_telemetry_listener(service.process_telemetry)
