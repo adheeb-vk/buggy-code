@@ -19,15 +19,28 @@ constexpr int PIN_ALCOHOL = 4;
 constexpr int PIN_WATER = -1;    // TODO: ADC-capable GPIO or -1
 constexpr int PIN_CURRENT = -1;  // TODO: ADC-capable GPIO or -1
 
+// ---- Optional ultrasonic parking sensors -------------------------------
+// Proposed assignments from the uploaded ESP32-S3 N16R8 pinout. These are
+// GPIO numbers (use the board's GPIO labels, not header pin positions).
+// TODO: Confirm your sensor leads match this table before powering the sensors.
+// Do not feed a 5 V echo output directly into the ESP32-S3; level-shift it.
+constexpr int PIN_US_FRONT_LEFT_TRIG = 5;  // TODO: proposed GPIO5
+constexpr int PIN_US_FRONT_LEFT_ECHO = 6;  // TODO: proposed GPIO6
+constexpr int PIN_US_FRONT_RIGHT_TRIG = 7; // TODO: proposed GPIO7
+constexpr int PIN_US_FRONT_RIGHT_ECHO = 8; // TODO: proposed GPIO8
+constexpr int PIN_US_REAR_TRIG = 9;        // TODO: proposed GPIO9
+constexpr int PIN_US_REAR_ECHO = 10;       // TODO: proposed GPIO10
+
 // ---- Digital sensors ------------------------------------------------------
 constexpr int PIN_SEATBELT = -1;  // TODO: GPIO or -1; expected active LOW
 
 // ---- MPU-9250 / MPU-6500 IMU ----------------------------------------------
-// Board labels: GPIO8 -> SDA and GPIO9 -> SCL. The MPU module must be powered
-// from 3V3, with AD0 tied to GND, so its I2C address is 0x68.
-constexpr int PIN_I2C_SDA = 8;
-constexpr int PIN_I2C_SCL = 9;
-constexpr uint8_t MPU6050_ADDRESS = 0x68;
+// Board labels: GPIO1 -> SDA and GPIO2 -> SCL. These pins have no boot, USB,
+// flash, or onboard RGB assignment on the photographed ESP32-S3 N16R8 board.
+// GPIO4 remains reserved for MQ-3 AO. Power the IMU from 3V3. AD0 may be tied
+// to GND (0x68) or 3V3 (0x69); firmware scans both addresses.
+constexpr int PIN_I2C_SDA = 1;
+constexpr int PIN_I2C_SCL = 2;
 
 // ---- Pi-commanded feature relays -----------------------------------------
 constexpr int PIN_RELAY_DROWSINESS = -1;  // TODO: GPIO or -1

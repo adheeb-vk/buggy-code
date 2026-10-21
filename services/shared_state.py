@@ -1,4 +1,4 @@
-"""Thread-safe live state shared by services and the read-only dashboard."""
+"""Thread-safe live state shared by services and the interactive dashboard."""
 
 from __future__ import annotations
 
@@ -23,6 +23,10 @@ class SharedState:
             "drowsiness": None,
             "alcohol": None,
             "geofence": None,
+            "parking": None,
+            "controls": {"enabled": {}, "relays": {}},
+            "acknowledged_alerts": {},
+            "runtime": {"mode": "unknown"},
         }
 
     def update_esp32(self, telemetry: Mapping[str, Any]) -> None:
@@ -42,6 +46,19 @@ class SharedState:
 
     def update_geofence(self, status: Mapping[str, Any]) -> None:
         self._update("geofence", dict(status))
+
+    def update_parking(self, status: Mapping[str, Any]) -> None:
+        self._update("parking", dict(status))
+
+    def update_controls(self, controls: Mapping[str, Any]) -> None:
+        self._update("controls", dict(controls))
+
+    def update_runtime(self, runtime: Mapping[str, Any]) -> None:
+        self._update("runtime", dict(runtime))
+
+    def acknowledge_alert(self, feature: str) -> None:
+        with self._lock:
+            self._state["acknowledged_alerts"][feature] = datetime.now(timezone.utc).isoformat()
 
     def add_hazard(self, hazard: Mapping[str, Any]) -> None:
         with self._lock:

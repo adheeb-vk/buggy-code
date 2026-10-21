@@ -103,6 +103,7 @@ class CameraDrowsinessService:
         self._on_status = on_status
         self._mock_frame_interval_seconds = mock_frame_interval_seconds
         self._lock = threading.Lock()
+        self._enabled = True
         self._stop_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._fatal_error: Exception | None = None
@@ -141,6 +142,24 @@ class CameraDrowsinessService:
         with self._lock:
             return self._status
 
+    def set_enabled(self, enabled: bool) -> None:
+        """Enable face analysis or clear its current status and relay."""
+        relay_change = False
+        with self._lock:
+            if self._enabled == enabled:
+                return
+            self._enabled = enabled
+            self._eye_frames = 0
+            self._yaw_frames = 0
+            self._normal_since = None
+            relay_change = self._status.alert_active and not enabled
+            self._status = DrowsinessStatus(None, None, False, False, False, False)
+            status = self._status
+        if relay_change:
+            self._relay_controller.trigger("drowsiness", False)
+        if self._on_status:
+            self._on_status(status)
+
     def fatal_error(self) -> Exception | None:
         """Return a camera pipeline startup/runtime error, if one occurred."""
         return self._fatal_error
@@ -159,6 +178,8 @@ class CameraDrowsinessService:
         distracted = abs(yaw_degrees) > self._config.head_yaw_degrees
         relay_change: bool | None = None
         with self._lock:
+            if not self._enabled:
+                return
             self._eye_frames = self._eye_frames + 1 if drowsy else 0
             self._yaw_frames = self._yaw_frames + 1 if distracted else 0
             trigger = (
@@ -196,6 +217,8 @@ class CameraDrowsinessService:
     def process_no_face(self) -> None:
         """Publish lost-face status without clearing an existing safety alert."""
         with self._lock:
+            if not self._enabled:
+                return
             self._status = DrowsinessStatus(
                 ear=None,
                 yaw_degrees=None,
@@ -211,10 +234,10 @@ class CameraDrowsinessService:
     def _run_mock(self) -> None:
         sample = 0
         while not self._stop_event.is_set():
-            phase = sample % 50
-            if 10 <= phase < 22:
+            phase = sample % 250
+            if 10 <= phase < 90:
                 self.process_measurement(ear=0.16, yaw_degrees=0.0)
-            elif 34 <= phase < 46:
+            elif 120 <= phase < 200:
                 self.process_measurement(ear=0.31, yaw_degrees=42.0)
             else:
                 self.process_measurement(ear=0.31, yaw_degrees=0.0)
@@ -264,6 +287,10 @@ class CameraDrowsinessService:
                 if not received:
                     LOGGER.warning("USB camera frame read failed")
                     self._stop_event.wait(0.1)
+                    continue
+                with self._lock:
+                    enabled = self._enabled
+                if not enabled:
                     continue
                 rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)

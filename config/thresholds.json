@@ -18,5 +18,11 @@
     "_comment": "TODO: MQ-3 detects alcohol vapour only; it cannot determine a driver's blood-alcohol concentration. Measure a warmed-up clean-air baseline and controlled test readings before setting these raw ESP32 ADC thresholds.",
     "trigger_above": null,
     "hysteresis": null
+  },
+  "parking": {
+    "_comment": "TODO: Provisional ultrasonic distance bands in centimetres. Tune after mounting the front-left, front-right, and rear sensors on the buggy.",
+    "clear_above_cm": 120.0,
+    "caution_above_cm": 60.0,
+    "warning_above_cm": 30.0
   }
 }

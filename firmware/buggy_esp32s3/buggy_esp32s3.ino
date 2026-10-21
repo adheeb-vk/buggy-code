@@ -39,6 +39,14 @@ RelayDefinition RELAYS[] = {
 constexpr size_t RELAY_COUNT = sizeof(RELAYS) / sizeof(RELAYS[0]);
 
 bool imuAvailable = false;
+uint8_t imuAddress = 0;
+uint8_t imuWhoAmI = 0;
+uint8_t i2cDevices[8];
+uint8_t i2cDeviceCount = 0;
+float ultrasonicFrontLeftCm = -1;
+float ultrasonicFrontRightCm = -1;
+float ultrasonicRearCm = -1;
+uint8_t ultrasonicScanIndex = 0;
 long accelX = 0;
 long accelY = 0;
 long accelZ = 0;
@@ -81,28 +89,69 @@ void initialiseSensors() {
     pinMode(PIN_SEATBELT, INPUT_PULLUP);
   }
 
+  // Optional parking sensors stay completely untouched while their pin
+  // constants are -1. Configure only complete trigger/echo pairs.
+  const int ultrasonicPins[][2] = {
+    {PIN_US_FRONT_LEFT_TRIG, PIN_US_FRONT_LEFT_ECHO},
+    {PIN_US_FRONT_RIGHT_TRIG, PIN_US_FRONT_RIGHT_ECHO},
+    {PIN_US_REAR_TRIG, PIN_US_REAR_ECHO},
+  };
+  for (const auto& pins : ultrasonicPins) {
+    if (pins[0] >= 0 && pins[1] >= 0) {
+      pinMode(pins[0], OUTPUT);
+      digitalWrite(pins[0], LOW);
+      pinMode(pins[1], INPUT);
+    }
+  }
+
   if (PIN_I2C_SDA < 0 || PIN_I2C_SCL < 0) {
     return;
   }
   Wire.begin(PIN_I2C_SDA, PIN_I2C_SCL);
   Wire.setClock(400000);
-  Wire.beginTransmission(MPU6050_ADDRESS);
-  if (Wire.endTransmission() != 0) {
+  for (uint8_t address = 1; address < 127; address++) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0 && i2cDeviceCount < sizeof(i2cDevices)) {
+      i2cDevices[i2cDeviceCount++] = address;
+    }
+  }
+  // MPU-9250 / MPU-6500 boards use 0x68 with AD0 low and 0x69 with AD0 high.
+  // Scan both so an AD0 jumper or module pull-up cannot make the sensor vanish.
+  const uint8_t addresses[] = {0x68, 0x69};
+  for (uint8_t address : addresses) {
+    Wire.beginTransmission(address);
+    if (Wire.endTransmission() == 0) {
+      imuAddress = address;
+      break;
+    }
+  }
+  if (imuAddress == 0) {
     return;
   }
-  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.beginTransmission(imuAddress);
   Wire.write(0x6B);  // MPU6050 power-management register.
   Wire.write(0);     // Wake the device.
-  imuAvailable = (Wire.endTransmission(true) == 0);
+  if (Wire.endTransmission(true) != 0) {
+    imuAddress = 0;
+    return;
+  }
+  Wire.beginTransmission(imuAddress);
+  Wire.write(0x75);  // WHO_AM_I register.
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom((int)imuAddress, 1, true) != 1) {
+    imuAddress = 0;
+    return;
+  }
+  imuWhoAmI = Wire.read();
+  imuAvailable = true;
 }
 
 bool readImu() {
   if (!imuAvailable) {
     return false;
   }
-  Wire.beginTransmission(MPU6050_ADDRESS);
+  Wire.beginTransmission(imuAddress);
   Wire.write(0x3B);  // First accelerometer register.
-  if (Wire.endTransmission(false) != 0 || Wire.requestFrom((int)MPU6050_ADDRESS, 6, true) != 6) {
+  if (Wire.endTransmission(false) != 0 || Wire.requestFrom((int)imuAddress, 6, true) != 6) {
     imuAvailable = false;
     return false;
   }
@@ -110,6 +159,34 @@ bool readImu() {
   accelY = (int16_t)((Wire.read() << 8) | Wire.read());
   accelZ = (int16_t)((Wire.read() << 8) | Wire.read());
   return true;
+}
+
+float readUltrasonicCm(int triggerPin, int echoPin) {
+  if (triggerPin < 0 || echoPin < 0) {
+    return -1;
+  }
+  digitalWrite(triggerPin, LOW);
+  delayMicroseconds(2);
+  digitalWrite(triggerPin, HIGH);
+  delayMicroseconds(10);
+  digitalWrite(triggerPin, LOW);
+  unsigned long echoUs = pulseIn(echoPin, HIGH, 18000UL);
+  return echoUs == 0 ? -1 : (float)echoUs / 58.0f;
+}
+
+void scanOneUltrasonicSensor() {
+  switch (ultrasonicScanIndex) {
+    case 0:
+      ultrasonicFrontLeftCm = readUltrasonicCm(PIN_US_FRONT_LEFT_TRIG, PIN_US_FRONT_LEFT_ECHO);
+      break;
+    case 1:
+      ultrasonicFrontRightCm = readUltrasonicCm(PIN_US_FRONT_RIGHT_TRIG, PIN_US_FRONT_RIGHT_ECHO);
+      break;
+    default:
+      ultrasonicRearCm = readUltrasonicCm(PIN_US_REAR_TRIG, PIN_US_REAR_ECHO);
+      break;
+  }
+  ultrasonicScanIndex = (ultrasonicScanIndex + 1) % 3;
 }
 
 void addConfiguredSensors(JsonDocument& document) {
@@ -125,11 +202,31 @@ void addConfiguredSensors(JsonDocument& document) {
   if (PIN_CURRENT >= 0) {
     document["current"] = analogRead(PIN_CURRENT);
   }
+  if (PIN_US_FRONT_LEFT_TRIG >= 0 && PIN_US_FRONT_LEFT_ECHO >= 0) {
+    if (ultrasonicFrontLeftCm < 0) document["ultrasonic_front_left_cm"] = nullptr;
+    else document["ultrasonic_front_left_cm"] = ultrasonicFrontLeftCm;
+  }
+  if (PIN_US_FRONT_RIGHT_TRIG >= 0 && PIN_US_FRONT_RIGHT_ECHO >= 0) {
+    if (ultrasonicFrontRightCm < 0) document["ultrasonic_front_right_cm"] = nullptr;
+    else document["ultrasonic_front_right_cm"] = ultrasonicFrontRightCm;
+  }
+  if (PIN_US_REAR_TRIG >= 0 && PIN_US_REAR_ECHO >= 0) {
+    if (ultrasonicRearCm < 0) document["ultrasonic_rear_cm"] = nullptr;
+    else document["ultrasonic_rear_cm"] = ultrasonicRearCm;
+  }
+  if (PIN_I2C_SDA >= 0 && PIN_I2C_SCL >= 0) {
+    JsonArray devices = document.createNestedArray("i2c_devices");
+    for (uint8_t index = 0; index < i2cDeviceCount; index++) {
+      devices.add(i2cDevices[index]);
+    }
+  }
   if (readImu()) {
     JsonObject accel = document.createNestedObject("accel");
     accel["x"] = accelX;
     accel["y"] = accelY;
     accel["z"] = accelZ;
+    document["imu_address"] = imuAddress;
+    document["imu_who_am_i"] = imuWhoAmI;
   }
 }
 
@@ -139,8 +236,9 @@ void sendTelemetryIfDue() {
     return;
   }
   lastTelemetryAt = now;
+  scanOneUltrasonicSensor();
 
-  StaticJsonDocument<384> document;
+  StaticJsonDocument<512> document;
   document["type"] = "telemetry";
   document["firmware"] = FIRMWARE_VERSION;
   document["uptime_ms"] = now;

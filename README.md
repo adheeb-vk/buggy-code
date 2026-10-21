@@ -188,13 +188,14 @@ To prove the drowsiness logic without a physical camera, run:
 
 ```bash
 source venv/bin/activate
-python services/camera_drowsiness.py --mock --duration 2
+python services/camera_drowsiness.py --mock --duration 12
 ```
 
-The mock stream cycles through normal, low-EAR, and excessive-yaw observations.
-It logs relay commands as it enters or clears an advisory. Camera calibration
-values are kept in `config/thresholds.json` and are marked `TODO` until tuned
-with the installed USB camera.
+The mock stream includes eye-closure and head-turn periods. The detector uses
+the previous setting of five consecutive measurements for eye closure or head
+turn; the time-based six-second settings have been removed. An alert clears
+after one second of normal measurements. Camera calibration values are marked
+`TODO` until tuned with the installed USB camera.
 
 ## Run pothole mapping without hardware
 
@@ -221,16 +222,25 @@ follows:
 | --- | --- | --- |
 | `VCC` | `3V3` | 3.3 V power and I²C logic level |
 | `GND` | `GND` | Shared ground |
-| `SDA` | pin labelled `8` | I²C data |
-| `SCL` | pin labelled `9` | I²C clock |
-| `AD0` | `GND` | Selects I²C address `0x68` |
+| `SDA` | pin labelled `1` | I²C data; right header, below `RX` |
+| `SCL` | pin labelled `2` | I²C clock; right header, below pin `1` |
+| `AD0` | `GND` | Usually selects I²C address `0x68`; firmware also detects `0x69`. |
 | `NCS` | `3V3` | Keeps the module in I²C mode |
 | `FSYNC` | `GND` | Unused input |
 | `EDA`, `ECL`, `INT` | Leave disconnected | Not needed for acceleration logging |
 
 Flash `firmware/buggy_esp32s3/buggy_esp32s3.ino`. The `imu` field in ESP32
 telemetry must become `1`, and telemetry then includes `accel` with `x`, `y`,
-and `z` readings at 50 Hz.
+and `z` readings at 50 Hz. It also reports `imu_address` and `imu_who_am_i`.
+
+If `imu` remains `0`, verify the four essential connections first: `VCC` to
+`3V3`, `GND` to `GND`, `SDA` to GPIO1, and `SCL` to GPIO2. `NCS` must be tied
+to `3V3` for I²C mode. Do not connect the module to 5 V for this setup.
+
+The telemetry field `i2c_devices` is an I²C address scan. With the MPU wired
+correctly it must contain `104` (`0x68`) or `105` (`0x69`). An empty list means
+the ESP32 cannot electrically see the board: check VCC/GND and make sure SDA
+and SCL are not swapped.
 
 Use the real USB-connected ESP32-S3 with mock GPS while the SIM808 is
 unpowered:
@@ -316,7 +326,7 @@ The service logs the `geofence` relay HIGH on entry and LOW on exit, then prints
 the active zone, advisory speed, location, and distance. Replace the clearly
 marked `TODO` mock zone with final exhibition venue data before hardware use.
 
-## Run the read-only dashboard
+## Run the interactive dashboard and full stack
 
 Install the declared dependencies, including Flask:
 
@@ -324,16 +334,118 @@ Install the declared dependencies, including Flask:
 python3 -m pip install -r requirements.txt
 ```
 
-Then start a mock dashboard bound to every network interface:
+Start every service with mock data and the dashboard bound to every network
+interface:
 
 ```bash
-python3 dashboard/app.py --mock
+source venv/bin/activate
+python main.py --mock
 ```
 
+The header shows **SIMULATION · NOT VEHICLE DATA** in this mode. Use it only
+for indoor development; its readings are deliberately synthetic.
+
+To test eye closure and distraction with the real USB camera while ESP32 and
+GPS remain mocked, use:
+
+```bash
+source venv/bin/activate
+python main.py --mock --real-camera --camera-index 0
+```
+
+The `--mock` option alone uses a synthetic camera stream and cannot observe
+your face. Keep the real camera visible to the dashboard. The restored detector
+triggers after five consecutive eye-closure or head-turn measurements.
+
 Open `http://<pi-ip>:5000` from a device on the same Wi-Fi. The dashboard polls
-its read-only `/api/state` endpoint every second. It shows driver status, GPS,
-geofence advisory, MQ-3 status, relay state, recent hazards, and raw ESP32
-telemetry.
+its live state every second. It shows driver status, GPS, geofence advisory,
+MQ-3 status, recent hazards, and raw ESP32 telemetry. The compact live map uses
+Leaflet with public OpenStreetMap tiles and needs no API key; the device viewing
+the dashboard needs internet access for map tiles. OpenStreetMap attribution is
+shown on the map. Numeric GPS coordinates continue to work when tiles are offline.
+Use **EXPAND MAP** to enlarge the GPS map and **CLOSE MAP** to return. The
+header **FULL SCREEN** button switches the whole dashboard into browser full-screen
+mode; press Escape or use **EXIT FULL SCREEN** to leave it.
+The parking page has matching **EXPAND VIEW** / **CLOSE VIEW** controls for its
+vehicle and sensor display, plus its own **FULL SCREEN** button.
+Feature switches prevent
+their corresponding service from operating its relay; relay buttons issue a
+manual command through the ESP32-S3. Alert acknowledgement dismisses the
+on-screen card but does not clear the underlying condition.
+
+The **Driver attention** switch pauses face analysis and clears its active
+alert when switched off. **Parking assistance** pauses ultrasonic processing,
+clears the parking display to `WAITING`, and mutes proximity speech; turning it
+back on resumes processing when the next ESP32 reading arrives. Parking has no
+relay control.
+
+Use **PARKING VIEW** in the header (or open `/parking`) for the full-height,
+top-down vehicle display. It has separate front-left, front-right, and rear
+distance indicators with configurable clear, caution, warning, and stop bands.
+The page deliberately shows `WAITING` until it receives real ultrasonic
+telemetry; simulation mode does not invent obstacle distances.
+
+The ESP32-S3 firmware accepts these optional JSON telemetry fields:
+`ultrasonic_front_left_cm`, `ultrasonic_front_right_cm`, and
+`ultrasonic_rear_cm`. Proposed trigger/echo GPIO pairs are 5/6 (front-left),
+7/8 (front-right), and 9/10 (rear), as recorded in
+`firmware/buggy_esp32s3/board_config.h`. Check your physical wiring against the
+board's GPIO labels before powering the sensors. For modules with a 5 V echo,
+use a voltage divider or level shifter before the ESP32-S3 echo GPIO. Proximity
+distance bands are in `config/thresholds.json` and are provisional until tested
+on the buggy.
+
+The dashboard's **Parking assistance** switch controls the ultrasonic
+proximity feature and its voice alerts together. It does not use an ESP32 relay.
+
+Run the real stack after verifying the individual devices:
+
+```bash
+source venv/bin/activate
+python main.py --esp32-port /dev/ttyACM0 --gps-port /dev/ttyAMA0
+```
+
+The header shows **LIVE · VEHICLE DATA** only with this command. A sensor that
+is disconnected or has no valid reading appears as `WAITING` or `—`; the
+dashboard does not substitute a mock reading in live mode.
+
+### Spoken alerts and Bluetooth speaker
+
+The full stack speaks drowsiness, calibrated MQ-3, geofence, pothole, and
+parking warnings through the Raspberry Pi's default audio output. Install the
+lightweight speech program once:
+
+```bash
+sudo apt update
+sudo apt install espeak-ng
+```
+
+Pair and connect the Bluetooth speaker, then select it as the Pi's audio output
+in the desktop sound settings. Check the speaker from a terminal before
+starting the buggy stack:
+
+```bash
+espeak-ng "Buggy voice alert test"
+```
+
+Announcements are queued so camera and sensor processing can continue while
+speech plays. To run the stack silently, add `--no-voice` to the `python main.py`
+command. If the speech program is missing, the rest of the stack still starts
+and logs that voice alerts are unavailable.
+
+Speech uses the female `en-us+f3` voice by default, at 140 words per minute,
+with less pause between words. Try another voice and modulation directly
+through the stack options, for example:
+
+```bash
+source venv/bin/activate
+python main.py --mock --voice en-us+f3 --voice-speed 140 --voice-pitch 55 --voice-pitch-range 40 --voice-volume 130 --voice-word-gap 2
+```
+
+Available voice names depend on the installed eSpeak NG data; `espeak-ng
+--voices=en` lists the English voices. The built-in voices remain synthetic;
+these settings improve pacing and tone, while a more natural neural voice would
+require installing a separate speech engine and voice model.
 
 ## Try a relay command without hardware
 

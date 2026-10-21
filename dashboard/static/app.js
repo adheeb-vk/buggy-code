@@ -1,56 +1,16 @@
-const value = (item) => item === null || item === undefined ? "—" : String(item);
-
-function renderDetails(id, fields) {
-  const root = document.getElementById(id);
-  root.replaceChildren();
-  Object.entries(fields || {}).forEach(([key, item]) => {
-    const term = document.createElement("dt");
-    term.textContent = key.replaceAll("_", " ");
-    const detail = document.createElement("dd");
-    detail.textContent = value(item);
-    if (item === true) detail.className = "active";
-    root.append(term, detail);
-  });
-}
-
-function renderHazards(hazards) {
-  const root = document.getElementById("hazards");
-  root.replaceChildren();
-  if (!hazards.length) { root.textContent = "No hazards recorded."; return; }
-  const table = document.createElement("table");
-  table.innerHTML = "<thead><tr><th>Location</th><th>Magnitude</th><th>Confidence</th><th>Time</th></tr></thead>";
-  const body = document.createElement("tbody");
-  hazards.forEach((hazard) => {
-    const row = document.createElement("tr");
-    [
-      `${hazard.latitude}, ${hazard.longitude}`,
-      `${hazard.magnitude_g} g`,
-      hazard.confidence,
-      hazard.timestamp_utc,
-    ].forEach((cell) => { const element = document.createElement("td"); element.textContent = value(cell); row.append(element); });
-    body.append(row);
-  });
-  table.append(body); root.append(table);
-}
-
-async function refresh() {
-  const connection = document.getElementById("connection-status");
-  try {
-    const response = await fetch("/api/state", { cache: "no-store" });
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const state = await response.json();
-    renderDetails("drowsiness", state.drowsiness);
-    renderDetails("gps", state.gps);
-    renderDetails("geofence", state.geofence);
-    renderDetails("alcohol", state.alcohol);
-    renderDetails("relays", state.relays);
-    renderHazards(state.hazards || []);
-    document.getElementById("esp32").textContent = JSON.stringify(state.esp32 || {}, null, 2);
-    connection.textContent = `Live state refreshed ${new Date().toLocaleTimeString()}`;
-  } catch (error) {
-    connection.textContent = `Dashboard data unavailable: ${error.message}`;
-  }
-}
-
-refresh();
-setInterval(refresh, 1000);
+const features={drowsiness:{label:"Driver attention",kicker:"CAMERA",color:"#4e7cff",description:"Eye closure and head direction.",relay:true},pothole:{label:"Road hazards",kicker:"IMU + GPS",color:"#f5bb59",description:"Marks high-impact road events.",relay:true},alcohol:{label:"Alcohol vapour",kicker:"MQ-3",color:"#ff6978",description:"Monitors calibrated alcohol signal.",relay:true},geofence:{label:"Speed advisory",kicker:"GPS ZONES",color:"#4dd8c5",description:"Advisory for saved GPS zones.",relay:true},parking:{label:"Parking assistance",kicker:"ULTRASONIC",color:"#ff9e45",description:"Obstacle detection and spoken proximity warnings.",relay:false}};
+let liveMap=null,liveMarker=null,lastMapCenter=null;
+const acknowledged=new Set(),value=(v,f="—")=>v===null||v===undefined?f:String(v);
+function setMapExpanded(expanded){const map=document.querySelector("#live-map");map.classList.toggle("expanded",expanded);document.querySelector("#map-close").classList.toggle("visible",expanded);document.querySelector("#map-expand").hidden=expanded;if(expanded)setTimeout(()=>liveMap?.invalidateSize(),80)}
+document.querySelector("#map-expand").addEventListener("click",()=>setMapExpanded(true));document.querySelector("#map-close").addEventListener("click",()=>setMapExpanded(false));
+const fullscreenButton=document.querySelector("#fullscreen-toggle");function syncFullscreenButton(){const active=!!document.fullscreenElement;fullscreenButton.textContent=active?"EXIT FULL SCREEN ⛶":"FULL SCREEN ⛶";fullscreenButton.setAttribute("aria-label",active?"Exit full screen":"Enter full screen")}fullscreenButton.addEventListener("click",async()=>{try{if(document.fullscreenElement)await document.exitFullscreen();else await document.documentElement.requestFullscreen()}catch(error){fullscreenButton.title="Full screen is unavailable in this browser"}});document.addEventListener("fullscreenchange",syncFullscreenButton);
+function featureControls(s){const root=document.querySelector("#feature-controls"),c=s.controls||{enabled:{},relays:{}};root.replaceChildren();for(const[n,m]of Object.entries(features)){const card=document.querySelector("#feature-template").content.firstElementChild.cloneNode(true),on=c.enabled[n]!==false,relay=c.relays[n]===true,sw=card.querySelector(".feature-switch"),button=card.querySelector(".relay-button");card.style.setProperty("--card-color",m.color);card.querySelector(".feature-kicker").textContent=m.kicker;card.querySelector("h3").textContent=m.label;card.querySelector(".feature-description").textContent=m.description;sw.checked=on;sw.onchange=()=>api(`/api/features/${n}`,{enabled:sw.checked});button.hidden=!m.relay;button.textContent=relay?"RELAY ON":"RELAY OFF";button.classList.toggle("on",relay);button.disabled=!on;button.onclick=()=>api(`/api/relays/${n}`,{active:!relay});card.querySelector(".feature-status").textContent=m.relay?(on?(relay?"ACTIVE":"MONITORING"):"DISABLED"):(on?"MONITORING":"DISABLED");root.append(card)}}
+function lines(id,items){const root=document.querySelector(id),dl=document.createElement("dl");root.replaceChildren();for(const[k,v]of Object.entries(items)){const row=document.createElement("div"),dt=document.createElement("dt"),dd=document.createElement("dd");row.className="line";dt.textContent=k;dd.textContent=value(v);row.append(dt,dd);dl.append(row)}root.append(dl)}
+function updateMap(g){const lat=Number(g.latitude),lon=Number(g.longitude),valid=g.latitude!==null&&g.latitude!==undefined&&g.longitude!==null&&g.longitude!==undefined&&Number.isFinite(lat)&&Number.isFinite(lon)&&Math.abs(lat)<=90&&Math.abs(lon)<=180,waiting=document.querySelector("#map-waiting");if(!valid)return;if(!window.L){waiting.textContent="MAP LIBRARY UNAVAILABLE";return}const point=[lat,lon];if(!liveMap){liveMap=L.map("live-map",{zoomControl:false,scrollWheelZoom:false}).setView(point,15);const tiles=L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png",{maxZoom:19,attribution:'&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'}).addTo(liveMap);tiles.on("tileerror",()=>{waiting.textContent="MAP TILES UNAVAILABLE · CHECK INTERNET";waiting.hidden=false});tiles.on("tileload",()=>{waiting.hidden=true});liveMarker=L.circleMarker(point,{radius:7,color:"#07101a",weight:2,fillColor:"#4dd8c5",fillOpacity:1}).addTo(liveMap);waiting.hidden=true;setTimeout(()=>liveMap.invalidateSize(),0)}else{liveMarker.setLatLng(point);if(!lastMapCenter||liveMap.distance(lastMapCenter,point)>15){liveMap.setView(point,liveMap.getZoom(),{animate:false});lastMapCenter=point}}}
+function telemetry(s){const d=s.drowsiness||{},g=s.gps||{},a=s.alcohol||{},z=s.geofence||{},active=d.alert_active;document.querySelector("#attention-icon").classList.toggle("alert",!!active);document.querySelector("#attention-state").textContent=active?"DRIVER ATTENTION ALERT":d.face_detected?"DRIVER ATTENTIVE":"WAITING FOR CAMERA";document.querySelector("#attention-detail").textContent=active?(d.face_detected?"Camera detected drowsiness or distraction.":"Driver face tracking is unavailable."):d.face_detected?"Face tracking is active.":"No current driver measurement.";lines("#drowsiness",{"EYE RATIO":d.ear==null?null:Number(d.ear).toFixed(3),"EYES":d.drowsy?"CLOSED":"OPEN","HEAD YAW":d.yaw_degrees==null?null:`${Number(d.yaw_degrees).toFixed(1)}°`,"HEAD":d.distracted?"TURNED":"FORWARD","FACE":d.face_detected?"DETECTED":"NOT DETECTED"});document.querySelector("#latitude").textContent=g.latitude==null?"--.------":Number(g.latitude).toFixed(6);document.querySelector("#longitude").textContent=g.longitude==null?"--.------":Number(g.longitude).toFixed(6);document.querySelector("#gps-speed").textContent=g.speed_kph==null?"-- km/h":`${Number(g.speed_kph).toFixed(1)} km/h`;document.querySelector("#gps-fix").textContent=g.latitude==null?"WAITING FOR FIX":"GPS LOCKED";document.querySelector("#alcohol-reading").textContent=a.raw_value==null?"--":a.raw_value;document.querySelector("#alcohol-status").textContent=a.threshold_configured?(a.alcohol_suspected?"ALERT: THRESHOLD EXCEEDED":"CALIBRATED · CLEAR"):"CALIBRATION REQUIRED";document.querySelector("#alcohol-bar").style.width=a.raw_value==null?"0%":`${Math.min(100,Number(a.raw_value)/40.95)}%`;document.querySelector("#zone-reading").textContent=z.active_zone||"NO ACTIVE ZONE";document.querySelector("#zone-status").textContent=z.advisory_speed==null?"WAITING FOR GPS":`${z.advisory_speed} km/h ADVISORY`;updateMap(g);document.querySelector("#esp32-status").textContent=s.esp32?.firmware?`ESP32: ${s.esp32.firmware}`:"ESP32: WAITING"}
+function hazards(items){const root=document.querySelector("#hazards");root.replaceChildren();if(!items?.length){root.innerHTML='<div class="empty">NO ROAD EVENTS RECORDED</div>';return}items.slice(0,5).forEach(h=>{const row=document.createElement("div"),head=document.createElement("b"),detail=document.createElement("span");row.className="hazard-row";head.textContent=`${Number(h.magnitude_g).toFixed(2)} g impact`;detail.textContent=`${Number(h.latitude).toFixed(5)}, ${Number(h.longitude).toFixed(5)} · ${new Date(h.timestamp_utc).toLocaleTimeString()}`;row.append(head,detail);root.append(row)})}
+function alertData(s){const d=s.drowsiness||{},a=s.alcohol||{},z=s.geofence||{},x=[];if(d.alert_active)x.push(["drowsiness","DRIVER ATTENTION ALERT","Drowsiness or distraction remains detected."]);if(a.alcohol_suspected)x.push(["alcohol","ALCOHOL VAPOUR ALERT","MQ-3 reading is above the configured threshold."]);if(z.active_zone)x.push(["geofence","SPEED ADVISORY",`Inside ${z.active_zone}.`]);return x}
+function alerts(s){const root=document.querySelector("#alerts"),items=alertData(s),active=new Set(items.map(([f])=>f));for(const f of acknowledged)if(!active.has(f))acknowledged.delete(f);root.replaceChildren();for(const[f,h,m]of items){if(acknowledged.has(f))continue;const el=document.createElement("article"),head=document.createElement("h4"),text=document.createElement("p"),button=document.createElement("button");el.className="alert";head.textContent=h;text.textContent=m;button.textContent="ACKNOWLEDGE";button.onclick=()=>{acknowledged.add(f);api(`/api/alerts/${f}/acknowledge`,{});el.remove()};el.append(head,text,button);root.append(el)}}
+async function api(url,body){try{const r=await fetch(url,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)}),d=await r.json();if(!r.ok)throw Error(d.error||"Command failed");render(d)}catch(e){window.alert(e.message)}}
+function render(s){featureControls(s);telemetry(s);hazards(s.hazards||[]);alerts(s);const runtime=s.runtime||{},sim=runtime.mode!=="live",banner=document.querySelector("#mode-banner");banner.textContent=sim?"SIMULATION · NOT VEHICLE DATA":"LIVE · VEHICLE DATA";banner.classList.toggle("simulation",sim);document.querySelector("#connection-status").textContent="SYSTEM ONLINE";document.querySelector("#connection-dot").classList.add("online");document.querySelector("#updated-at").textContent=new Date(s.updated_at_utc).toLocaleTimeString()}
+async function refresh(){try{const r=await fetch("/api/state",{cache:"no-store"});if(!r.ok)throw Error();render(await r.json())}catch{document.querySelector("#connection-status").textContent="SYSTEM OFFLINE";document.querySelector("#connection-dot").classList.remove("online")}}refresh();setInterval(refresh,1000);

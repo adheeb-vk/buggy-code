@@ -1,25 +1,8 @@
 <!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Buggy Intelligence Dashboard</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
-  </head>
-  <body>
-    <header>
-      <h1>Buggy Intelligence Dashboard</h1>
-      <p id="connection-status">Loading live state…</p>
-    </header>
-    <main>
-      <section><h2>Driver monitoring</h2><dl id="drowsiness"></dl></section>
-      <section><h2>GPS position</h2><dl id="gps"></dl></section>
-      <section><h2>Geo-fenced advisory</h2><dl id="geofence"></dl></section>
-      <section><h2>Alcohol-vapour sensor</h2><dl id="alcohol"></dl></section>
-      <section><h2>Relay states</h2><dl id="relays"></dl></section>
-      <section><h2>Recent road hazards</h2><div id="hazards"></div></section>
-      <section class="wide"><h2>Raw ESP32-S3 telemetry</h2><pre id="esp32"></pre></section>
-    </main>
-    <script src="{{ url_for('static', filename='app.js') }}"></script>
-  </body>
-</html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Buggy Assist</title><link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body><main class="console"><header class="console-header"><div class="identity"><span class="mark">B</span><div><strong>BUGGY ASSIST</strong><small>DRIVER MONITORING SYSTEM</small></div></div><div id="mode-banner" class="mode-banner">CONNECTING</div><a class="view-toggle" href="/parking">PARKING VIEW →</a><button id="fullscreen-toggle" class="view-toggle fullscreen-toggle" type="button" aria-label="Enter full screen">FULL SCREEN ⛶</button><div class="clock"><span id="updated-at">--:--:--</span><small>LAST UPDATE</small></div></header>
+<section class="console-grid"><aside class="column left-column"><div class="section-label">FEATURE CONTROL</div><section id="feature-controls" class="feature-stack"></section></aside>
+<section class="center-column"><section class="focus-card"><div class="section-label">DRIVER STATE</div><div class="attention"><div id="attention-icon" class="attention-icon">◉</div><div><strong id="attention-state">WAITING FOR CAMERA</strong><p id="attention-detail">No current driver measurement.</p></div></div><div id="drowsiness" class="data-lines"></div></section><section class="position-card"><div class="section-label">LIVE POSITION</div><div class="coordinate"><span id="latitude">--.------</span><small>LATITUDE</small><span id="longitude">--.------</span><small>LONGITUDE</small></div><div class="location-meta"><span id="gps-speed">-- km/h</span><span id="gps-fix">WAITING FOR FIX</span></div><div id="live-map" class="grid-map" aria-label="Live GPS map"><button id="map-expand" class="map-expand" type="button">EXPAND MAP ⛶</button><div id="map-waiting" class="map-waiting">WAITING FOR GPS FIX</div></div><button id="map-close" class="map-close" type="button" aria-label="Close full screen map">× &nbsp; CLOSE MAP</button></section></section>
+<aside class="column right-column"><section class="signal-card"><div class="section-label">ALCOHOL SENSOR</div><strong id="alcohol-reading">--</strong><span id="alcohol-status">WAITING FOR MQ-3</span><div class="bar"><i id="alcohol-bar"></i></div></section><section class="signal-card"><div class="section-label">GEOFENCE</div><strong id="zone-reading">NO ACTIVE ZONE</strong><span id="zone-status">WAITING FOR GPS</span></section><section class="hazard-card"><div class="section-label">RECENT ROAD EVENTS</div><div id="hazards"></div></section></aside></section>
+<footer class="console-footer"><span><i id="connection-dot" class="dot"></i><b id="connection-status">CONNECTING</b></span><span id="esp32-status">ESP32: WAITING</span><span>CONTROLS REQUIRE LIVE STACK</span></footer></main><div id="alerts" class="alert-stack" aria-live="assertive"></div>
+<template id="feature-template"><article class="feature-control"><div class="feature-control-top"><div><span class="feature-kicker"></span><h3></h3></div><label class="switch"><input type="checkbox" class="feature-switch"><span></span></label></div><p class="feature-description"></p><div class="control-bottom"><button class="relay-button" type="button">RELAY OFF</button><span class="feature-status">OFFLINE</span></div></article></template><script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>
